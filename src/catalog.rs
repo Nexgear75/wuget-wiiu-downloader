@@ -44,6 +44,17 @@ impl Kind {
         }
     }
 
+    /// The `0005xxxx` prefix a title id of this kind carries.
+    fn prefix(self) -> Option<&'static str> {
+        match self {
+            Kind::Game => Some("00050000"),
+            Kind::Dlc => Some("0005000c"),
+            Kind::Update => Some("0005000e"),
+            Kind::Demo => Some("00050002"),
+            Kind::System => None,
+        }
+    }
+
     /// Titles worth offering in the picker. System titles are noise.
     pub fn is_user_facing(self) -> bool {
         self != Kind::System
@@ -139,6 +150,23 @@ pub fn find(title_id: &str) -> Option<&'static Title> {
     catalog().iter().find(|t| t.title_id == needle)
 }
 
+/// The id a companion of `kind` would carry: same low half, different prefix.
+///
+/// A game, its update and its DLC only differ by the `0005xxxx` prefix, so
+/// `00050000101c9500` (Breath of the Wild) implies `0005000e101c9500` for the
+/// update and `0005000c101c9500` for the DLC.
+pub fn companion_id(title_id: &str, kind: Kind) -> Option<String> {
+    if title_id.len() != 16 {
+        return None;
+    }
+    Some(format!("{}{}", kind.prefix()?, &title_id[8..]))
+}
+
+/// The catalog entry for a companion of `kind`, when the database knows it.
+pub fn companion(title_id: &str, kind: Kind) -> Option<&'static Title> {
+    find(&companion_id(title_id, kind)?)
+}
+
 /// The legit ticket bundled for this title, if the mirror had one.
 pub fn bundled_ticket(title_id: &str) -> Option<&'static [u8]> {
     let needle = title_id.to_ascii_lowercase();
@@ -225,6 +253,43 @@ mod tests {
     #[test]
     fn database_parses() {
         assert!(all().len() > 3000, "catalogue trop petit : {}", all().len());
+    }
+
+    #[test]
+    fn companion_ids_swap_only_the_prefix() {
+        let botw = "00050000101c9500";
+        assert_eq!(
+            companion_id(botw, Kind::Update).as_deref(),
+            Some("0005000e101c9500")
+        );
+        assert_eq!(
+            companion_id(botw, Kind::Dlc).as_deref(),
+            Some("0005000c101c9500")
+        );
+        assert_eq!(companion_id("trop court", Kind::Update), None);
+        assert_eq!(companion_id(botw, Kind::System), None);
+    }
+
+    #[test]
+    fn breath_of_the_wild_finds_its_update_and_dlc() {
+        let botw = "00050000101c9500";
+        let upd = companion(botw, Kind::Update).expect("update BOTW absente");
+        let dlc = companion(botw, Kind::Dlc).expect("DLC BOTW absent");
+
+        assert_eq!(upd.kind, Kind::Update);
+        assert_eq!(dlc.kind, Kind::Dlc);
+        // A companion belongs to the same game, so region must line up.
+        let base = find(botw).unwrap();
+        assert_eq!(upd.region, base.region);
+        assert_eq!(dlc.region, base.region);
+    }
+
+    #[test]
+    fn a_title_without_companions_reports_none() {
+        // A demo never carries an update or DLC of its own.
+        let demo = "0005000210162301";
+        assert!(companion(demo, Kind::Update).is_none());
+        assert!(companion(demo, Kind::Dlc).is_none());
     }
 
     #[test]

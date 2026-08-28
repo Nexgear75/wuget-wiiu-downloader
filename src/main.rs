@@ -73,6 +73,14 @@ enum Command {
         /// Clé de titre (32 hex) pour un titre absent du catalogue.
         #[arg(long)]
         key: Option<String>,
+
+        /// Ajoute la mise à jour de chaque jeu de base demandé.
+        #[arg(long)]
+        with_update: bool,
+
+        /// Ajoute le DLC de chaque jeu de base demandé.
+        #[arg(long)]
+        with_dlc: bool,
     },
 
     /// Cherche dans le catalogue embarqué.
@@ -117,10 +125,22 @@ fn main() -> Result<()> {
                 println!("Rien à faire.");
                 return Ok(());
             }
-            run_pipeline(&cli, &output, &chosen, None)
+
+            let extra = offer_companions(&chosen);
+            let jobs: Vec<Job> = chosen
+                .iter()
+                .map(|t| (*t, None))
+                .chain(extra.iter().map(|t| (t, None)))
+                .collect();
+            run_pipeline(&cli, &output, &jobs)
         }
 
-        Some(Command::Get { title_ids, key }) => {
+        Some(Command::Get {
+            title_ids,
+            key,
+            with_update,
+            with_dlc,
+        }) => {
             if title_ids.is_empty() {
                 bail!("donne au moins un Title ID, ou lance `wuget` sans argument");
             }
@@ -141,10 +161,23 @@ fn main() -> Result<()> {
                     ),
                 }
             }
-            // Titles built on the fly need to outlive the loop above.
-            let owned: Vec<&Title> = owned.iter().collect();
-            run_pipeline(&cli, &output, &titles, key)?;
-            run_pipeline(&cli, &output, &owned, key)
+            let extra = if *with_update || *with_dlc {
+                companions_for(&titles, *with_dlc)
+                    .into_iter()
+                    .filter(|t| *with_update || t.kind != Kind::Update)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            // Companions ride on their own ticket, never on --key.
+            let jobs: Vec<Job> = titles
+                .iter()
+                .map(|t| (*t, key))
+                .chain(owned.iter().map(|t| (t, key)))
+                .chain(extra.iter().map(|t| (t, None)))
+                .collect();
+            run_pipeline(&cli, &output, &jobs)
         }
 
         Some(Command::Search { query, region }) => {
@@ -187,6 +220,103 @@ fn default_output_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Documents/Cemu/games")
+}
+
+/// An update the catalog never listed, but that the CDN serves anyway.
+///
+/// Updates need no title key — Nintendo's own cetk covers them — so an id and
+/// a name borrowed from the base game are enough to download one.
+fn cdn_update_title(title_id: &str, base: &Title) -> Title {
+    Title {
+        kind: Kind::Update,
+        title_id: title_id.to_string(),
+        title_key: None,
+        name: base.name.clone(),
+        region: base.region.clone(),
+        has_ticket: false,
+    }
+}
+
+/// Does the CDN serve a TMD for this title? Used to find updates the bundled
+/// database does not list.
+fn tmd_exists(title_id: &str) -> bool {
+    fetch_title_version(title_id).is_ok()
+}
+
+/// The update and DLC that go with the base games in `chosen`.
+///
+/// Updates are looked up in the catalog first, then probed on the CDN. DLC is
+/// catalog-only: without a title key there is no way to build its ticket.
+fn companions_for(chosen: &[&Title], want_dlc: bool) -> Vec<Title> {
+    let mut extra: Vec<Title> = Vec::new();
+
+    for title in chosen {
+        if title.kind != Kind::Game {
+            continue;
+        }
+
+        if let Some(upd) = catalog::companion(&title.title_id, Kind::Update) {
+            extra.push(upd.clone());
+        } else if let Some(id) = catalog::companion_id(&title.title_id, Kind::Update) {
+            // Not in the database — ask the CDN before giving up.
+            if tmd_exists(&id) {
+                extra.push(cdn_update_title(&id, title));
+            }
+        }
+
+        if want_dlc
+            && let Some(dlc) = catalog::companion(&title.title_id, Kind::Dlc)
+            && dlc.is_obtainable()
+        {
+            extra.push(dlc.clone());
+        }
+    }
+
+    // Neither a hand-picked title nor a duplicate should be queued twice.
+    extra.retain(|e| !chosen.iter().any(|c| c.title_id == e.title_id));
+    extra.dedup_by(|a, b| a.title_id == b.title_id);
+    extra
+}
+
+/// After the picker: list the updates and DLC that go with the chosen games
+/// and offer to queue them too. Returns what the user accepted.
+fn offer_companions(chosen: &[&Title]) -> Vec<Title> {
+    if !chosen.iter().any(|t| t.kind == Kind::Game) {
+        return Vec::new();
+    }
+
+    println!("\nRecherche des mises à jour et DLC…");
+    let extra = companions_for(chosen, true);
+    if extra.is_empty() {
+        println!("  Aucun contenu additionnel trouvé.");
+        return Vec::new();
+    }
+
+    println!();
+    for t in &extra {
+        println!("  + {:<7} {}  ({})", t.kind.label(), t.name, t.region);
+    }
+    println!();
+
+    if confirm(&format!(
+        "Télécharger aussi ces {} élément(s) ?",
+        extra.len()
+    )) {
+        extra
+    } else {
+        Vec::new()
+    }
+}
+
+/// Ask once for the whole batch. Any answer but an explicit "no" means yes.
+fn confirm(question: &str) -> bool {
+    print!("{question} [O/n] ");
+    let _ = std::io::stdout().flush();
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer).is_err() {
+        return false;
+    }
+    !matches!(answer.trim().to_lowercase().as_str(), "n" | "non" | "no")
 }
 
 /// A title we know nothing about beyond its id — the user supplied the key.
@@ -288,13 +418,12 @@ fn fetch_title_version(title_id: &str) -> Result<[u8; 2]> {
     Ok(fst::Tmd::parse(&bytes)?.title_version)
 }
 
-fn run_pipeline(
-    cli: &Cli,
-    output: &Path,
-    titles: &[&Title],
-    key: Option<[u8; 16]>,
-) -> Result<()> {
-    if titles.is_empty() {
+/// One queued download: a title, plus the key to use for it. Companions carry
+/// no key of their own — an update rides on Nintendo's cetk.
+type Job<'a> = (&'a Title, Option<[u8; 16]>);
+
+fn run_pipeline(cli: &Cli, output: &Path, jobs: &[Job<'_>]) -> Result<()> {
+    if jobs.is_empty() {
         return Ok(());
     }
 
@@ -305,17 +434,17 @@ fn run_pipeline(
         patch_demo: !cli.no_patch_demo,
     };
 
-    for (i, title) in titles.iter().enumerate() {
+    for (i, (title, key)) in jobs.iter().enumerate() {
         println!(
             "\n[{}/{}] {}  ({}, {})",
             i + 1,
-            titles.len(),
+            jobs.len(),
             title.name,
             title.region,
             title.kind.label()
         );
 
-        if let Err(e) = one_title(cli, output, title, key, &options) {
+        if let Err(e) = one_title(cli, output, title, *key, &options) {
             eprintln!("  ✗ {title_id} : {e:#}", title_id = title.title_id);
         }
     }

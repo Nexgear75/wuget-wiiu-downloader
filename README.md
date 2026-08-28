@@ -23,6 +23,7 @@ cargo install --path .
 ```sh
 wuget                                # interactive picker (3621 titles)
 wuget get 0005000010143500           # direct download, by Title ID
+wuget get <id> --with-update         # base game + its update
 wuget search zelda --region EUR      # search the catalog
 wuget decrypt <dump>                 # decrypt an existing NUS dump
 wuget ticket <id> [--generated]      # print a ticket to stdout
@@ -35,6 +36,37 @@ downloads, default 3), `--retry N`, `--no-patch-dlc`, `--no-patch-demo`.
 In the picker: type to filter, `Tab` switches region, `Shift+Tab` switches
 type, `Space` toggles multi-selection (when the search is empty), `Enter`
 launches.
+
+## Updates and DLC
+
+A game, its update and its DLC only differ by the `0005xxxx` prefix of their
+Title ID, so wuget can find the companions of any base game you pick.
+
+Select a base game in the picker and wuget looks up its update and DLC, lists
+what it found, and asks once whether to download them too:
+
+```
+Recherche des mises à jour et DLC…
+
+  + Update  The Legend of Zelda — Breath of the Wild  (EUR)
+  + DLC     The Legend of Zelda — Breath of the Wild  (EUR)
+
+Télécharger aussi ces 2 élément(s) ? [O/n]
+```
+
+`get` stays scriptable and never prompts — opt in explicitly:
+
+```sh
+wuget get 00050000101c9500 --with-update --with-dlc
+```
+
+Updates are looked up in the bundled catalog first, then probed on Nintendo's
+CDN, since an update needs no title key — its cetk covers it. DLC is
+catalog-only: without a key there is no way to build its ticket.
+
+Load the base game in Cemu with *File ▸ Load*, and add the update and DLC with
+*File ▸ Install game title* — wuget writes exactly the `code/content/meta`
+layout that installer expects.
 
 ## Tickets
 
