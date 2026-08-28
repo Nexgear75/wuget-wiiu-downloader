@@ -1,83 +1,92 @@
 # wuget
 
-Télécharge et déchiffre du contenu Wii U en une seule commande. Réunit ce que
-faisaient FunKiiU (protocole CDN, tickets) et cdecrypt (déchiffrement AES,
-extraction FST) dans un seul binaire Rust, sans Python ni outil externe.
+Download and decrypt Wii U content in a single command. It merges what
+FunKiiU (CDN protocol, tickets) and cdecrypt (AES decryption, FST extraction)
+used to do separately into one Rust binary, no Python or external tools
+required.
 
 ```
-Title ID ──▶ ticket ──▶ CDN Nintendo ──▶ déchiffrement ──▶ code/ content/ meta/
+Title ID ──▶ ticket ──▶ Nintendo CDN ──▶ decryption ──▶ code/ content/ meta/
 ```
 
-## Utilisation
+## Installation
+
+Download the binary for your OS from the [Releases](../../releases) page,
+or build it yourself:
 
 ```sh
-wuget                                # sélecteur interactif (3621 titres)
-wuget get 0005000010143500           # direct, par Title ID
-wuget search zelda --region EUR      # cherche dans le catalogue
-wuget decrypt <dump>                 # déchiffre un dump NUS existant
-wuget ticket <id> [--generated]      # écrit un ticket sur la sortie standard
+cargo install --path .
 ```
 
-Options globales : `-o/--output` (défaut `~/Documents/Cemu/games`), `--keep`
-(conserve les `.app`/`.h3`), `--no-decrypt`, `--jobs N` (téléchargements
-simultanés, défaut 3), `--retry N`, `--no-patch-dlc`, `--no-patch-demo`.
+## Usage
 
-Dans le sélecteur : taper filtre, `Tab` change de région, `⇧Tab` de type,
-`Espace` coche plusieurs titres (quand la recherche est vide), `Entrée` lance.
+```sh
+wuget                                # interactive picker (3621 titles)
+wuget get 0005000010143500           # direct download, by Title ID
+wuget search zelda --region EUR      # search the catalog
+wuget decrypt <dump>                 # decrypt an existing NUS dump
+wuget ticket <id> [--generated]      # print a ticket to stdout
+```
+
+Global options: `-o/--output` (default `~/Documents/Cemu/games`), `--keep`
+(keep the `.app`/`.h3` files), `--no-decrypt`, `--jobs N` (concurrent
+downloads, default 3), `--retry N`, `--no-patch-dlc`, `--no-patch-demo`.
+
+In the picker: type to filter, `Tab` switches region, `Shift+Tab` switches
+type, `Space` toggles multi-selection (when the search is empty), `Enter`
+launches.
 
 ## Tickets
 
-Trois sources, par ordre de préférence :
+Three sources, in order of preference:
 
-1. **cetk Nintendo** pour les updates — légitime ;
-2. **ticket légitime embarqué** (964 titres) — s'installe sans patch de
-   signature sur console ;
-3. **ticket généré** depuis la clé du catalogue — fonctionne dans Cemu, mais
-   demande des patchs de signature sur du matériel réel.
+1. **Nintendo cetk** for updates — legitimate;
+2. **embedded legitimate ticket** (964 titles) — installs without a
+   signature patch on real hardware;
+3. **generated ticket** derived from the catalog key — works in Cemu, but
+   requires signature patches on real hardware.
 
-La source retenue est affichée à chaque téléchargement.
+The source used is displayed for every download.
 
-## Sortie
+## Output
 
-`<output>/<Nom> [RÉGION]/{code,content,meta}`, directement chargeable dans Cemu
-via *File ▸ Load* sur le `.rpx` de `code/`. Les fichiers chiffrés
-intermédiaires sont supprimés après un déchiffrement réussi (`--keep` pour les
-garder) ; en cas d'échec ils sont toujours conservés, pour ne pas avoir à
-retélécharger.
+`<output>/<Name> [REGION]/{code,content,meta}`, directly loadable in Cemu via
+*File ▸ Load* on the `.rpx` in `code/`. Intermediate encrypted files are
+removed after a successful decryption (`--keep` to keep them); on failure
+they are always kept, so you don't have to re-download.
 
-## Vérification
+## Verification
 
-Le portage est validé contre les outils d'origine :
+The port is validated against the original tools:
 
-- le ticket produit par `wuget ticket <id> --generated` est identique octet à
-  octet à celui de FunKiiU ;
-- la sortie de `wuget decrypt` est identique à celle de cdecrypt (`diff -r`
-  silencieux sur 1018 fichiers / 1,7 Go de *The Wind Waker HD*) ;
-- chaque bloc de contenu haché voit son SHA-1 H0 vérifié pendant l'extraction,
-  donc une clé fausse échoue bruyamment plutôt que d'écrire des données
-  corrompues.
+- the ticket produced by `wuget ticket <id> --generated` is byte-for-byte
+  identical to FunKiiU's;
+- the output of `wuget decrypt` is identical to cdecrypt's (silent `diff -r`
+  on 1018 files / 1.7 GB of *The Wind Waker HD*);
+- every hashed content block has its SHA-1 H0 verified during extraction, so
+  a wrong key fails loudly instead of writing corrupted data.
 
-`cargo test` couvre le parsing du catalogue, les deux chemins de ticket, la FST
-et le sélecteur.
+`cargo test` covers catalog parsing, both ticket paths, the FST, and the
+picker.
 
-## Données embarquées
+## Embedded data
 
-`data/` contient la base de clés (3621 titres), les 964 tickets légitimes, le
-certificat commun, le gabarit de ticket et le patch de déverrouillage DLC.
-Tout est compilé dans le binaire par `build.rs`, qui empaquette les tickets en
-un blob unique indexé.
+`data/` contains the key database (3621 titles), the 964 legitimate tickets,
+the common certificate, the ticket template, and the DLC unlock patch. All
+of it is compiled into the binary by `build.rs`, which packs the tickets
+into a single indexed blob.
 
-`reference/` conserve les sources C de cdecrypt ayant servi au portage.
+`reference/` keeps the original cdecrypt C sources used for the port.
 
-## Licence et attribution
+## License and attribution
 
-GPL-3.0-or-later, hérité de cdecrypt dont `src/decrypt.rs` et `src/fst.rs` sont
-un portage.
+GPL-3.0-or-later, inherited from cdecrypt, of which `src/decrypt.rs` and
+`src/fst.rs` are a port.
 
 - **cdecrypt** — © 2020-2023 VitaSmith, © 2013-2015 crediar, GPL-3.0.
   <https://github.com/VitaSmith/cdecrypt>
-- **FunKiiU** — cearp et the cerea1killer ; `src/ticket.rs` et `src/download.rs`
-  portent son protocole CDN et sa fabrication de ticket.
+- **FunKiiU** — cearp and the cerea1killer; `src/ticket.rs` and
+  `src/download.rs` port its CDN protocol and ticket fabrication.
 
-Le contenu de `data/` (base de clés, tickets) provient d'un miroir public de la
-Wii U Title Key Database et n'est pas couvert par cette licence.
+The contents of `data/` (key database, tickets) come from a public mirror
+of the Wii U Title Key Database and are not covered by this license.
